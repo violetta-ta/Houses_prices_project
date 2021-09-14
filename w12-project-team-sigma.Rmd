@@ -1,0 +1,996 @@
+---
+title: 'Project week 12: Dependence of houses prices in King County from different
+  factors'
+author: "Team Sigma"
+date: "25 07 2020"
+output: 
+    #html_document: 
+      #theme: readable
+     # toc: yes  
+    pdf_document: default
+urlcolor: cyan
+---
+
+```{r setup, echo = FALSE, message = FALSE, warning = FALSE}
+options(scipen = 1, digits = 4, width = 80, fig.align = "center")
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+# Introduction
+
+The purpose of the current research will include choosing the efficient model to predict the housing prices in highly populated areas like Seattle and its surrounding. Also, we plan to figure out, which time of the year it is more beneficial to purchase new house, and whether the demand for different sizes and configuration of houses depend from the time of the year.
+
+To research this, we are going to take a dataset, which contains house sale prices for King County, which includes Seattle. It includes homes sold between May 2014 and May 2015. The data for these sales comes from the official public records of home sales in the King County area, Washington State, posted on kaggle.com.   
+
+Data set contains 21613 observations on 21 variables, out of which we will explore following 20:
+
+**date** - Date of the home sale, char
+
+**price** - Price of each home sold, numeric
+
+**bedrooms** - Number of bedrooms, integer
+
+**bathrooms** - Number of bathrooms, where .5 accounts for a room with a toilet but no shower, numeric
+
+**sqft_living** - Square footage of the apartments interior living space, integer
+
+**sqft_lot** - Square footage of the land space, integer
+
+**floors** - Number of floors, numeric
+
+**waterfront** - A dummy variable for whether the apartment was overlooking the waterfront or not, integer
+
+**view** - An index from 0 to 4 of how good the view of the property was, integer
+
+**condition** - An index from 1 to 5 on the condition of the apartment, integer
+
+**grade** - An index from 1 to 13, where 1-3 falls short of building construction and design, 7 has an average level of construction and design, and 11-13 have a high quality level of construction and design. Integer
+
+**sqft_above** - The square footage of the interior housing space that is above ground level, integer
+
+**sqft_basement** - The square footage of the interior housing space that is below ground level, integer
+
+**yr_built** - The year the house was initially built, integer
+
+**yr_renovated** - The year of the house’s last renovation, integer
+
+**zipcode** - What zipcode area the house is in, integer
+
+**lat** - Latitude, numeric
+
+**long** - Longitude, numeric
+
+**sqft_living15** - The square footage of interior housing living space for the nearest 15 neighbors, integer
+
+**sqft_lot15** - The square footage of the land lots of the nearest 15 neighbors, integer
+
+We are going to do the following steps to answer the questions, which were raised:
+
+
+1. As the 'data' variable is given in the char format, we are going to transform it to the data format, as well we can consider changing the format of other variables for the purpose of model fitting.
+2. Exploratory data analysis, helping to address the question if the configuration of sold houses depend on the time of the year and defining if there is any collinearity in the model if to fit it with all the variables.
+3. Splitting the data on the test set and training set
+4. Fitting simple additive model, and checking its significance and significance of all the variables
+5. Proposing potential transformations, based on the data analysis and on initial model fitting.
+6. Choosing the candidate models for testing from the ones, which were fit. 
+7. Test those models vs different criteria, using test set, to define the most efficient model for predicting housing prices using the current dataset. 
+8. Discuss the chosen model, and discuss, how houses prices vary over the year, and whether house configuration changes over the year. 
+
+***
+
+# Methods
+
+## Exploratory Data Analysis
+
+This section will explore the initial state of the data set and examine an initial linear model. Initially, before fitting any model, we will load the data.
+
+```{r}
+houses = read.csv("kc_house_data.csv")
+```
+
+## Data Set Structure
+
+We will modify the `data` variable to Data format to avoid having each of the observation as a factor variable level.
+
+We are going as well to delete `id` variable from the initial data set, as it will not represent any interest in the light of this research.
+
+As `waterfront` is a dummy variable, we would change its format to be a factor variable.
+
+As variable 'sqft_basement' has many zero values (`r mean(houses$sqft_basement == 0) * 100` %), and it will prevent some of the transformations in future model selection process, we are going to transform it to a factor variable with value "Yes" if the house has basement, and value "No" if the house has no basement. We will not cover in this investigation the dependency of price on the basement size in case if the house has basement, and only cover the dependency of price on presence of the basement at all. 
+
+```{r}
+mean(houses$sqft_basement == 0)
+```
+
+Let's check same metric for variable `yr_renovated`. 
+
+```{r}
+mean(houses$yr_renovated == 0)
+```
+
+As we have `r mean(houses$yr_renovated == 0) * 100` % of houses not renovated, most probably the metric will not be very useful, or cause issues with model assumptions. A possible variant of solving it would be to transform `yr_renovated` to a factor variable with value "Yes" if the house was renovated, and value "No" if the house was not renovated. We have tried as well to check the variant of adjusting this variable to be the year when the house was built when `yr_renovated` was `0`, and the `yr_renovated` value, if it was above zero. But as the final result of modeling was same, and the variant with category variable does not cause collinearity in the model, we prefer it.  
+
+Looking through the data set values, there seem to be no missing values, so nothing is needed to do in respect to the missing values. 
+
+```{r}
+library(lubridate)
+#changing the format of `data`
+houses$date = paste(substr(houses$date, 1,8),  sep = "")
+houses$date = ymd(houses$date)
+
+#removing `id`
+houses = subset(houses, select = -c(id))
+
+#changing the format of `waterfront`
+houses$waterfront = as.factor(houses$waterfront)
+
+
+#changing the format of `sqft_basement`
+houses$sqft_basement = as.factor(ifelse(houses$sqft_basement > 0, "Yes", "No"))
+
+#changing values of `yr_renovated`
+houses$yr_renovated = as.factor(ifelse(houses$yr_renovated > 0, "Yes", "No"))
+str(houses)
+
+
+```
+
+## Effect of House Configuration on Price Over Time
+
+In this section,  we will determine how house configurations affect the number of homes sold over the year. To avoid issues with outliers, instead of examining mean house prices, we will examine median house prices. We will also examine the frequency of home listings given a house configuration over time. We will examine only a number of the available configurations, which include `waterfront`, `bedrooms`, `bathrooms`, and `floors`. Note, that for number of bedrooms and bathrooms, we limit the amount to be between $0$ and $5$, are there are quantities beyond $5$. In addition, since the number of bedrooms and bathrooms can be decimal numbers, for simplicity, we round the columns before plotting. 
+
+### Initial Exploration of House Prices
+
+```{r, echo = F}
+# https://blog.revolutionanalytics.com/2015/08/plotting-time-series-in-r.html
+library(ggplot2)
+
+ggplot(houses,aes(date,price)) + 
+  geom_line(aes(color="Price")) +
+  labs(x ="Date", y="Price", color="Legend") +
+  ggtitle("House Prices Over Time") + 
+  theme(plot.title = element_text(lineheight=.7, face="bold"))
+```
+
+Above we have a time-series plot of house prices over time. We can see that there is a lot of variability in the house prices, and the range of house prices changes rapidly over time. Since there is a lot of noise in the data, instead of plotting house prices, it could be more meaningful for us to plot the mean house prices.
+
+```{r, echo = F}
+ggplot(houses,aes(date,price)) + 
+  labs(x ="Date", y="Average Price", color="Legend") +
+  ggtitle("Average House Prices Over Time") + 
+  theme(plot.title = element_text(lineheight=.7, face="bold")) +
+  stat_summary(fun = "mean", colour = "red", size = 2, geom = "line")
+```
+
+Now, we can begin to observe a signal within our data. It appears that the average houses price tends to be between $500000$ USD and $10000000$ USD. We can see that there are some large spikes in mean house prices on October 2014 and beyond April 2015. Since we are examining mean house prices, we may expect our data set to contain points with high influence and/or high leverage. We should consider removing these points after determining our candidate model.
+
+### Waterfront
+
+```{r, echo=F}
+library(scales)
+ggplot(houses, aes(x=date)) + geom_histogram(binwidth=30, colour="white") +
+  scale_x_date(labels = date_format("%Y-%b"),
+               breaks = seq(min(houses$date)-5, max(houses$date)+5, 30)) +
+  theme(plot.title = element_text(lineheight=.7, face="bold"),
+      axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  ylab("Frequency") + 
+  xlab("Year and Month") + 
+  ggtitle("Frequency of Houses Sold Over Time Given Waterfront") +
+  facet_wrap(~ waterfront) 
+```
+
+Most of the houses listed do not contain a waterfront. However, it may be still useful to examine the trends in the listed homes without a waterfront. From the plot, it appears that there the number of houses with waterfront listings decreases in the winter months (i.e. November to December).
+
+```{r, echo=FALSE}
+ggplot(houses,aes(date,price)) + 
+  labs(x ="Date", y="Average Price", color="Legend") +
+  ggtitle("Median House Prices Over Time Given Waterfront") + 
+  theme(plot.title = element_text(lineheight=.7, face="bold")) +
+  stat_summary(fun = "median", colour = "red", size = 1, geom = "line") +
+  facet_wrap(~ waterfront) 
+```
+
+The plot above shows the median house prices over time given the waterfront feature. A $0$ signifies that the house does not have a waterfront, while a $1$ signifies that the house does have a waterfront. From the plot, it appears that for any time of the year, houses with a waterfront are significantly more expensive than those without a waterfront. 
+
+### Bathrooms
+
+```{r, echo=F}
+library(scales)
+ggplot(houses[which(houses$bathrooms < 5), ], aes(x=date)) + 
+  geom_histogram(binwidth=30, colour="white") +
+  scale_x_date(labels = date_format("%Y-%b"),
+               breaks = seq(min(houses$date)-5, max(houses$date)+5, 30)) +
+  theme(plot.title = element_text(lineheight=.7, face="bold"),
+      axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  ylab("Frequency") + 
+  xlab("Year and Month") + 
+  ggtitle("Frequency of Houses Sold Over Time Given Bathrooms") +
+  facet_wrap(~ round(bathrooms))
+```
+
+Most of the homes listed have between $1$ to $4$ bathrooms, and $2$ bathroom houses are the most popular for any given month. For two bathroom houses, there seems to be a much bigger decline in houses sold during the winter months (i.e. November to December) compared to houses with any other number of bathrooms.
+
+```{r, echo=FALSE}
+ggplot(houses[which(houses$bathrooms < 5), ],aes(date,price)) + 
+  labs(x ="Date", y="Median Price", color="Legend") +
+  ggtitle("Median House Prices Over Time Given Bathrooms") + 
+  theme(plot.title = element_text(lineheight=.7, face="bold"),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  stat_summary(fun = "median", colour = "red", size = 1, geom = "line") +
+  facet_wrap(~ round(bathrooms)) 
+```
+
+From the plot, it appears that for any time of the year, houses with more bathrooms are more expensive. There does not seem to be any trends in the price given the number of bedrooms.
+
+### Bedrooms
+
+```{r, echo=F}
+library(scales)
+ggplot(houses[which(houses$bedrooms < 6), ], aes(x=date)) + 
+  geom_histogram(binwidth=30, colour="white") +
+  scale_x_date(labels = date_format("%Y-%b"),
+               breaks = seq(min(houses$date)-5, max(houses$date)+5, 30)) +
+  theme(plot.title = element_text(lineheight=.7, face="bold"),
+      axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  ylab("Frequency") + 
+  xlab("Year and Month") + 
+  ggtitle("Frequency of Houses Sold Over Time Given Bedrooms") +
+  facet_wrap(~ round(bedrooms))
+```
+
+The number of bedrooms in the listed houses tends to be between $2$ and $4$, where houses with $3$ and $4$ bedrooms are the most frequent. Once again, we can see a decline in the number of listings during the winter months for $3$ and $4$ bedroom houses bigger, then for $1$ and $5$ bedroom houses.
+
+```{r, echo=FALSE}
+ggplot(houses[which(houses$bedrooms < 6), ],aes(date,price)) + 
+  labs(x ="Date", y="Median Price", color="Legend") +
+  ggtitle("Median House Prices Over Time Given Bedrooms") + 
+  theme(plot.title = element_text(lineheight=.7, face="bold"),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  stat_summary(fun = "median", colour = "red", size = 1, geom = "line") +
+  facet_wrap(~ round(bedrooms)) 
+```
+
+From the plot, it appears that for any time of the year, the houses prices given the number of bedrooms appear to be stable. Nonetheless, for the five bedroom houses, there appears to be a spike in the median house prices in October 2014.
+
+### Floors
+
+```{r, echo=F}
+library(scales)
+ggplot(houses, aes(x=date)) + geom_histogram(binwidth=30, colour="white") +
+  scale_x_date(labels = date_format("%Y-%b"),
+               breaks = seq(min(houses$date)-5, max(houses$date)+5, 30)) +
+  theme(plot.title = element_text(lineheight=.7, face="bold"),
+      axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  ylab("Frequency") + 
+  xlab("Year and Month") + 
+  ggtitle("Frequency of Houses Sold Over Time Given Floors") +
+  facet_wrap(~ round(floors))
+```
+
+The number of floors in the listed houses tends to be between $1$ and $2$, in which these amounts are the most frequent. There is a decline in the number of listings during the winter months.
+
+```{r, echo=FALSE}
+ggplot(houses,aes(date,price)) + 
+  labs(x ="Date", y="Median Price", color="Legend") +
+  ggtitle("Median House Prices Over Time Given Floors") + 
+  theme(plot.title = element_text(lineheight=.7, face="bold"),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  stat_summary(fun = "median", colour = "red", size = 1, geom = "line") +
+  facet_wrap(~ round(floors)) 
+```
+
+From the plot, it appears that there appears to be spikes in the median house prices in October for any given floor configuration. In the $2$ and $4$ floor configurations, there is a large spike during the month of October. House prices slightly increase with the number of floors available.
+
+### Living Space
+```{r, echo = F}
+sqft_living_1q = subset(houses,houses$sqft_living < summary(houses$sqft_living)[['1st Qu.']])
+sqft_living_1q$yr_month = (floor_date(sqft_living_1q$date,"month"))
+sqft_living_1q_agg = aggregate(sqft_living_1q[, 'price'], list(sqft_living_1q$yr_month), mean)
+sqft_living_1q_agg$quartile = '1st'
+
+sqft_living_1q_3q = subset(houses,(houses$sqft_living > summary(houses$sqft_living)[['1st Qu.']]) & (houses$sqft_living < summary(houses$sqft_living)[['3rd Qu.']]))
+sqft_living_1q_3q$yr_month = (floor_date(sqft_living_1q_3q$date,"month"))
+sqft_living_1q_3q_agg = aggregate(sqft_living_1q_3q[, 'price'], list(sqft_living_1q_3q$yr_month), mean)
+sqft_living_1q_3q_agg$quartile = '1st-3rd'
+
+sqft_living_3q = subset(houses,houses$sqft_living > summary(houses$sqft_living)[['3rd Qu.']])
+sqft_living_3q$yr_month = (floor_date(sqft_living_3q$date,"month"))
+sqft_living_3q_agg = aggregate(sqft_living_3q[, 'price'], list(sqft_living_3q$yr_month), mean)
+sqft_living_3q_agg$quartile = '3rd'
+
+sqft_living_price_agg_df = rbind(sqft_living_1q_agg,sqft_living_3q_agg, sqft_living_1q_3q_agg)
+colnames(sqft_living_price_agg_df) = c('date','price','quartile')
+
+p = ggplot() + 
+  geom_line(data = sqft_living_1q_agg, aes(x = Group.1, y = x, group = 1, color = "1st Quartile")) +
+    geom_line(data = sqft_living_1q_3q_agg, aes(x = Group.1, y = x, group = 1, color = "1st-3rd Quartile")) +
+    geom_line(data = sqft_living_3q_agg, aes(x = Group.1, y = x, group = 1, color = "3rd Quartile")) +
+  scale_colour_manual("", 
+                      breaks = c("1st Quartile", "1st-3rd Quartile", "3rd Quartile"),
+                      values = c("1st Quartile"="green", "1st-3rd Quartile"="red", "3rd Quartile"="blue")) +
+  xlab('Date') +
+  ylab('Price') +
+  ggtitle("Average Home Sales Price Over Time Given Living Space")+
+  theme(plot.title = element_text(lineheight=.7, face="bold"),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+print(p)
+```
+
+From the plot, we see a comparison of different homes' living space against average home prices per month over a period of time.  We've categorized the homes based on the quartiles based on living sqft space with 1st quartile(below 1427 sq.ft), 1st-3rd quartile (1427-2550 sq.ft), 3rd quartile (above 2550 sq. ft).  From the plot, we can see that there is significant difference in price between homes in the upper 3rd quartile in comparison to the homes below it.  By comparison the gap between prices for homes in the 1st quartile and the 1st-3rd quartile, is significantly smaller. In regards to the price over time, we see that homes in the 1st quartile and the 1st-3rd quartile tend to hold steady throughout the year with a small steady dip in price between Oct 2014-Jan 2015, before steadily climbing again as it approaches the spring months (March-April).  With homes above the 3rd quartile, we can see more volatility in the price, as there are more sharp dips in September 2014, and another sharp dip in February 2015 months, before quickly increasing the following month in March 2015.
+
+## Initial Model Exploration
+
+Next, we are going to build a simple additive model, and explore, whether there is any potential collinearity between all the predictors:
+
+```{r}
+add_model = lm(price ~ ., data = houses)
+library(faraway)
+vif(add_model)[vif(add_model)>5]
+```
+
+As predictors `sqft_living` and `sqft_above` have values significantly bigger than 5, we will need to check on the next stages that they will not be present in the final model together. Before going further, we will split initial dataset to training and test dataset, and make all the next investigations on the training dataset:
+
+```{r}
+set.seed(1)
+n_trn = nrow(houses) * 0.2
+n_tst = nrow(houses) - n_trn
+house_trn_idx = sample(1:nrow(houses), n_trn)
+
+house_trn = houses[house_trn_idx, ]
+house_tst = houses[-house_trn_idx, ]
+
+```
+
+First, we will look at the scatter plots for all the predictors in the training dataset, except factor ones, to be able to see if there is any dependencies between predictors and response, which we can use in proposing candidate models:
+
+```{r, echo = F}
+par(mfrow = c(4, 4), mar = c(2, 2, 1, 1))
+plot(price ~ date, data = house_trn, main = "price vs date")
+plot(price ~ bedrooms, data = house_trn, main = "price vs bedrooms")
+plot(price ~ bathrooms, data = house_trn, main = "price vs bathrooms")
+plot(price ~ sqft_living, data = house_trn, main = "price vs sqft_living")
+plot(price ~ sqft_lot, data = house_trn, main = "price vs sqft_lot")
+plot(price ~ floors, data = house_trn, main = "price vs floors")
+plot(price ~ view, data = house_trn, main = "price vs view")
+plot(price ~ condition, data = house_trn, main = "price vs condition")
+plot(price ~ grade, data = house_trn, main = "price vs grade")
+plot(price ~ sqft_above, data = house_trn, main = "price vs sqft_above")
+plot(price ~ yr_built, data = house_trn, main = "price vs yr_built")
+plot(price ~ zipcode, data = house_trn, main = "price vs zipcode")
+plot(price ~ lat, data = house_trn, main = "price vs latitude")
+plot(price ~ long, data = house_trn, main = "price vs longitude")
+plot(price ~ sqft_living15, data = house_trn, main = "price vs sqft_living15")
+plot(price ~ sqft_lot15, data = house_trn, main = "price vs sqft_lot15")
+```
+
+On the plots, it is seen, that all the predictors has some relationship with the response. At least 4 of them (`bathrooms`, `sqft_living`, `sqft_above` and `sqft_living15`) have similar dependency, close to logarithmic, so we will need to consider checking whether all of those variables significant and then we can think of response transformation. Or, if some of those not significant we can delete it. 
+
+To be able to check model assumptions, and also make tests for `R squared` and `LOOCV RMSE` afterwards, we will make functions to test all of this together.
+
+```{r, echo = F}
+library(lmtest)
+#function to plot Fitted vs Residuals and Q-Q plot for a model
+plot_graph = function(model) {
+  par(mfrow = c(1,2))
+  plot(fitted(model), resid(model), col = "green", pch = 20, cex = 1.5,
+       xlab = "Fitted", ylab = "Residuals", 
+       main = "Fitted vs Residuals")
+  abline(h = 0, col = "red", lwd = 2)
+
+  qqnorm(resid(model), col = "green", pch = 20, cex = 1.5)
+  qqline(resid(model), col = "red", lwd = 2)
+}
+
+#function to test Breush-Pagan, Shapiro tests, LOOC RMSE,R squared, AIC, BIC
+test_check = function(model){
+  result = c(shapiro.test(resid(model))$p.value,
+  bptest(model)$p.value,
+  sqrt(mean((resid(model) / (1 - hatvalues(model))) ^ 2)),
+  summary(model)$adj.r.squared,
+  AIC(model),
+  BIC(model))
+  names(result) = c("Shapiro p-value", "BP p-value", "LOOCV RMSE", "Adjusted R^2", "AIC", "BIC")
+  return (result)
+}
+
+```
+
+
+## Initial Model Fitting
+
+Let's fit a simple additive model with the training data, and explore any model assumptions are violated. We will start the check with equal distribution assumption check and normality assumption check:
+
+```{r}
+add_model_trn = lm(price ~ ., data = house_trn)
+
+plot_graph(add_model_trn)
+
+```
+
+According to the graphs above, both assumptions are violated. In order to confirm it once more, we will check the result of Shapiro test and Breush-Pagan tests:
+
+```{r}
+test_check(add_model_trn)
+```
+
+The results of the test confirm the observations. To check which candidate model and which transformations we can propose, let's see the model summary:
+
+```{r}
+summary(add_model_trn)
+```
+
+Let's try to delete from the model the variables, which are not be significant as per results of t-test (`floors`, `sqft_lot`, `sqft_above`, `sqft_living15`). We can see, that the entire model is significant as per p-value of F-test.
+
+```{r}
+red_model = lm(price ~ . - sqft_above - floors - sqft_lot - sqft_living15, data = house_trn)
+anova(red_model, add_model_trn)[2, 'Pr(>F)']
+test_check(red_model)
+```
+
+Result of the F-test with anova function shows, that we need to choose the reduced model, as the p-value of F test is equal to `r anova(red_model, add_model_trn)[2, 'Pr(>F)']`, and is big enough to consider the FTR for $H_0$: $\beta_{floors} = \beta_{sqft\_lot} = \beta_{sqft\_above} = \beta_{sqft\_living15} = 0$.
+After reducing the model, results of the assumption tests slightly improved. Let's see if there is any kind of collinearity in the model:
+
+```{r}
+vif(red_model)
+```
+
+The results show that now there is no more collinearity in the model.
+
+## Proposal of Candidate Models
+
+To make a model selection, we propose to test following candidate test models with test dataset:
+
+1. Simple additive model
+2. A model with response transformation (log transformation proposed)
+3. A model with transformations of the response and predictors, including log transformations and polynomial transformation
+4. A model with all above, but with adding interactions
+5. A model with Box-Cox transformation
+
+For point 2, as on the initial model Fitted vs Residuals plot the variance increases, let's fit the model with log transformation of the response, and check the scatter plots of the predictors vs response, and all the test metrics.
+
+```{r}
+log_model = lm(log(price) ~ . - sqft_above - floors - sqft_lot - sqft_living15, data = house_trn)
+test_check(log_model)
+plot_graph(log_model)
+```
+
+The results of the tests improved a lot after this transformations, but not to the level where we can confirm normality or equal distribution assumption. However, on the Fitted vs residuals plot the variance now is not increasing, but maximum at the middle of the graph and decreasing to the ends on both sides.
+
+```{r}
+summary(log_model)
+```
+
+Also, we can see from the model summary, that according to the p-value of the t-test, `sqft_lot15` and `sqft_basement` can be removed from the model. Let's do it and check the significance of $H_0$, where both corresponding beta coefficients will be equal to zero:
+
+```{r}
+log_model_2 = lm(log(price) ~ date + bedrooms + bathrooms + sqft_living + waterfront + view + condition + grade + yr_built + yr_renovated + zipcode + lat + long, data = house_trn)
+test_check(log_model_2)
+anova(log_model_2, log_model)[2, "Pr(>F)"]
+```
+
+As the F-test showed big p-value `r anova(log_model_2, log_model)[2, "Pr(>F)"]`, $H_0$ FTR, and we can eliminate the predictors `sqft_lot15` and `sqft_basement`. We will take for the evaluation model `log_model_2` as the model, stated in point 2.
+
+To see which transformations of the predictors we can take, we will plot again the dependency of the left predictors from the log of response. 
+
+```{r, echo = F}
+par(mfrow = c(3, 4), mar = c(2, 2, 1, 1))
+plot(log(price) ~ date, data = house_trn, main = "log(price) vs date")
+plot(log(price) ~ bedrooms, data = house_trn, main = "log(price) vs bedrooms")
+plot(log(price) ~ bathrooms, data = house_trn, main = "log(price) vs bathrooms")
+plot(log(price) ~ sqft_living, data = house_trn, main = "log(price) vs sqft_living")
+plot(log(price) ~ view, data = house_trn, main = "log(price) vs view")
+plot(log(price) ~ condition, data = house_trn, main = "log(price) vs condition")
+plot(log(price) ~ grade, data = house_trn, main = "log(price) vs grade")
+plot(log(price) ~ yr_built, data = house_trn, main = "log(price) vs yr_built")
+plot(log(price) ~ yr_renovated, data = house_trn, main = "log(price) vs yr_renovated")
+plot(log(price) ~ zipcode, data = house_trn, main = "log(price) vs zipcode")
+plot(log(price) ~ lat, data = house_trn, main = "log(price) vs latitude")
+plot(log(price) ~ long, data = house_trn, main = "log(price) vs longitude")
+
+```
+
+Look like `sqft_living`, `bedrooms` or `bathrooms` has logarithmic relationship with response, and `zipcode` and `lat` - polynomial. 
+
+Let's try to add with polynomial and log transformations of some of predictors, based on the plots above to the log transformation of the response:
+
+```{r}
+quad_model = lm(log(price) ~ date + bedrooms  +  bathrooms + log(sqft_living)  + floors + waterfront + view + condition + grade   + I(lat^2) + I(lat^3)   +  yr_built + yr_renovated + zipcode, data = house_trn)
+test_check(quad_model)
+
+plot_graph(quad_model)
+summary(quad_model)
+```
+
+Normality and equal distribution assumptions are still violated for this model, but p-values of corresponding tests are higher then for the previous one, and we will take `it`quad_model` as a 3rd candidate model. 
+Next, let's check if we can do some interactions, which can improve the test characteristics:
+
+```{r}
+int_model = lm(log(price) ~ date + bedrooms:floors  +  bathrooms + log(sqft_living)   + waterfront + view + condition : grade   + I(lat^2) + I(lat^3)   +  yr_built:yr_renovated + zipcode, data = house_trn)
+test_check(int_model)
+
+plot_graph(int_model)
+summary(int_model)
+```
+
+The result of both bptest and Shapiro test appeared to be better for this model, as well as the LOOCV-RMSE. The model is significant according to results of F-test, and all the interaction terms are significant as well according to the result of t-test. For the 5-th model we propose Box-Cox transformation on the set of predictors, chosen by regsubsets function:
+
+```{r}
+library(leaps)
+summary(regsubsets(log(price) ~ ., data = house_trn))
+
+```
+
+It appears that the `bathrooms`, `sqft_living`, `waterfront`, `view`,  `grade`, `yr_built`, `lat`, and `sqft_living15` are significant. We will begin our model selection with these predictors.
+
+```{r}
+library(MASS)
+m1 = lm(log(price) ~ bathrooms + waterfront + view + grade  + yr_built + lat + zipcode + sqft_living + sqft_living15, data = houses)
+boxcox(m1, plotit = TRUE, lambda = seq(0.59, 0.62, by = 0.002))
+```
+
+We determine that we should use $\lambda=0.593$.
+
+```{r}
+box_model = lm((((log(price) ^ 0.593) - 1) / 0.593) ~  bathrooms + waterfront + view + grade  + yr_built + lat + zipcode + sqft_living, data = house_trn)
+test_check(box_model)
+plot_graph(box_model)
+summary(box_model)
+
+```
+
+## Other Model Considerations
+
+There were multiple considerations finding models.  Though five were ultimately selected as candidate models in this report for further evaluations, there were other models which were explored.  One such model proposal included modifying other variable data types in the house dataset to see if we could produce a more accurate model fit.  In this approach, we coerced the zip code (initially integer) to be a factor variable, as it represented location based information, and didn't have much merit to be analyzed as a numeric type variable.  In addition to this, we also converted the date field (the sales transaction date), to be parsed as a month year substring, and converted that to be interpreted as a categorical variable, to analyze it as a point of year rather than a continuous date value.  Due to the volume of dummy variables that were generated, we could only perform model reduction using the step function with AIC, going backwards from the full additive model.  The step function, ended up dropping just 1 variable (sqft_basement).  The LOOCV RMSE and Adjusted R Squared values looked promising, in terms of model evaluation metrics, however due to the volume of dummy variables that were generated from the factor variables(zip code and month date) in addition to the predictors from the data, 96 in total, the model was prone to overfitting and made it difficult to explain the model's predictors in the result.  Due to this, we chose not to include this in the candidate models for consideration.
+
+
+
+***
+
+# Results
+
+In this section, we will examine the results of training and testing using our chosen models.
+
+### Model Testing
+
+Now, we are going to evaluate all 5 proposed models:
+
+```{r}
+add_model_trn = lm(price ~ ., data = house_trn)
+
+log_model_2 = lm(log(price) ~ date + bedrooms + bathrooms + sqft_living + waterfront + view + 
+                   condition + grade + yr_built + yr_renovated + zipcode + lat + 
+                   long, data = house_trn)
+
+quad_model = lm(log(price) ~ date + bedrooms  +  bathrooms + log(sqft_living)  + floors + 
+                  waterfront + view + condition + grade   + I(lat^2) + I(lat^3) +  
+                  yr_built  + zipcode, data = house_trn)
+
+int_model = lm(log(price) ~ date + bedrooms:floors  +  bathrooms + log(sqft_living) + 
+                 waterfront + view + condition : grade   + I(lat^2) + I(lat^3)   +  
+                 yr_built:yr_renovated + zipcode, data = house_trn)
+
+box_model = lm((((log(price) ^ 0.593) - 1) / 0.593) ~  bathrooms + waterfront + view + grade + 
+                 yr_built + lat + zipcode + sqft_living, data = house_trn)
+
+```
+
+
+To test the models, we will use following metrics:
+
+1. RMSE for prediction on the test dataset, measured for this model 
+2. Adjusted $R^2$
+3. Shapiro and Breush-Pagan test values, calculated for this model
+4. Number of outliers for each model
+5. AIC for each model
+6. BIC for each model
+7. Making cross-fold validation for the models 
+
+We will start with RMSE calculation for all 5 models:
+
+```{r}
+Y_tst = house_tst$price
+n_tst = nrow(house_tst) 
+
+y_hat_tst_1 = rep(0, n_tst)
+y_hat_tst_2 = rep(0, n_tst)
+y_hat_tst_3 = rep(0, n_tst)
+y_hat_tst_4 = rep(0, n_tst)
+
+y_hat_tst_1 = (predict(add_model_trn, newdata = subset(house_tst, select = -c(price)), 
+                       param = "price"))
+RMSE_tst_1 = sqrt(sum((Y_tst - y_hat_tst_1) ^ 2) / n_tst)
+
+y_hat_tst_2 = exp(predict(log_model_2, newdata = subset(house_tst, select = -c(price)), 
+                          param = "price"))
+RMSE_tst_2 = sqrt(sum((Y_tst - y_hat_tst_2) ^ 2) / n_tst)
+
+y_hat_tst_3 = exp(predict(quad_model, newdata = subset(house_tst, select = -c(price)), 
+                          param = "price"))
+RMSE_tst_3 = sqrt(sum((Y_tst - y_hat_tst_3) ^ 2) / n_tst)
+
+y_hat_tst_4 = exp(predict(int_model, newdata = subset(house_tst, select = -c(price)), 
+                          param = "price"))
+RMSE_tst_4 = sqrt(sum((Y_tst - y_hat_tst_4) ^ 2) / n_tst)
+
+y_hat_tst_5 = exp(predict(box_model, newdata = subset(house_tst, select = -c(price)), 
+                          param = "price"))
+RMSE_tst_5 = sqrt(sum((Y_tst - y_hat_tst_5) ^ 2) / n_tst)
+```
+
+Then, we will fit already calculated $R^2$ values of all 5 models, RMSE data and LOOCV RMSE data to the table:
+
+```{r, echo = F}
+table = data.frame(rows = c("RMSE on test set", "Adjusted $R^2$", "LOOCV RMSE", "AIC","BIC"),
+                   r_model1 = c(RMSE_tst_1, unname(test_check(add_model_trn)[4]), 
+                                unname(test_check(add_model_trn)[3]), unname(test_check(add_model_trn)[5]),unname(test_check(add_model_trn)[6])),
+                   r_model2 = c(RMSE_tst_2, unname(test_check(log_model_2)[4]), 
+                                test_check(log_model_2)[3], unname(test_check(log_model_2)[5]),unname(test_check(log_model_2)[6])),
+                   r_model3 = c(RMSE_tst_3, unname(test_check(quad_model)[4]), 
+                                test_check(quad_model)[3], unname(test_check(quad_model)[5]),unname(test_check(quad_model)[6])),
+                   r_model4 = c(RMSE_tst_4, unname(test_check(int_model)[4]), 
+                                test_check(int_model)[3], unname(test_check(int_model)[5]),unname(test_check(int_model)[6])),
+                   r_model5 = c(RMSE_tst_5, unname(test_check(box_model)[4]), 
+                                test_check(box_model)[3], unname(test_check(box_model)[5]),unname(test_check(box_model)[6])))
+
+library("knitr")
+kable(
+  table,
+  format = "markdown",
+  digits = 2,
+  col.names = c("Test", "Additive model", "Response log transform", "Predictor transform", "Interaction model", "Box-Cox transform"),
+  align = "l",
+  caption = "Results of testing different models",
+  label = NULL,
+  format.args = list(big.mark = ","),
+  escape = TRUE)
+```
+
+Results of Shapiro and Breush-Pagan test per model:
+
+```{r, echo = F}
+
+table = data.frame(rows = c( "Additive model", "Response log transform", "Predictor transform", "Interaction model", "Box-Cox transform"),
+                   Shapiro = c(unname(test_check(add_model_trn)[1]), test_check(log_model_2)[1], test_check(quad_model)[1], test_check(int_model)[1], test_check(box_model)[1]),
+                   bp = c(unname(test_check(add_model_trn)[2]), test_check(log_model_2)[2], test_check(quad_model)[2], test_check(int_model)[2], test_check(box_model)[2]))
+                   
+
+library("knitr")
+kable(
+  table,
+  format = "markdown",
+  digits = 153,
+  col.names = c("Test", "Shapiro test p-value", "B-P test p-value" ),
+  align = "l",
+  caption = "Results of assumption testing different models",
+  label = NULL,
+  format.args = list(),
+  escape = TRUE)
+
+```
+
+
+As well, let's define the number of influential observations for each of the model:
+
+```{r}
+influential = c(sum(cooks.distance(add_model_trn) > 4 / length(resid(add_model_trn))), 
+                sum(cooks.distance(log_model_2) > 4 / length(resid(log_model_2))),
+                sum(cooks.distance(quad_model) > 4 / length(resid(quad_model))),
+                sum(cooks.distance(int_model) > 4 / length(resid(int_model))),
+                sum(cooks.distance(box_model) > 4 / length(resid(box_model))))
+names_i = c("Additive model", "Response log transform", "Predictor transform", "Interaction model", "Box-Cox transform")
+
+kable(
+  cbind(names_i, influential),
+  format = "markdown",
+  digits = 0,
+  col.names = c("Test", "Number of outliers"),
+  align = "l",
+  caption = "Number of outliers per model",
+  label = NULL,
+  format.args = list(),
+  escape = TRUE)
+```
+
+Let's see, how the Q-Q plot and the Fitted vs Residuals plot look like for the `quad_model` (model with predictor transformation) after deleting influential observations:
+
+```{r}
+keep = cooks.distance(quad_model) < 4 / length(resid(quad_model))
+new_mod = lm(log(price) ~ date + bedrooms  +  bathrooms + log(sqft_living)  + floors + waterfront + view + condition + grade   + I(lat^2) + I(lat^3)   +  yr_built  + zipcode, data = house_trn, subset = keep)
+test_check(new_mod)
+plot_graph(new_mod)
+```
+
+
+We can see as per graphs with removed influential observations, that normality assumption is not violated, if to take $\alpha = 0.5$ (as the p-value will be smaller and equal `r test_check(new_mod)[1]`), and all the Adjusted $R^2$ value improved as well compared to the value for this model with influential observations included. However, the AIC and BIC are 50% higher, then for the source model.   
+
+### Cross-Fold Validation
+
+As an additional model evaluation measure, we will perform 10-fold cross validation for each one of the candidate models.  This will serve to further convince us, that the model evaluation results, are not just a byproduct of a single train-test data split.
+
+Additive Model:
+
+```{r}
+
+library(caret)
+
+# Define training control
+set.seed(123) 
+
+train.control=trainControl(method = "cv", number = 10)
+# Train the moquad_model$call[[2]]del
+model1 = train(price ~ ., method = "lm", data = house_tst,
+               trControl = train.control)
+
+```
+
+Response Log Transform:
+
+```{r}
+# Define training control
+set.seed(123) 
+train.control = trainControl(method = "cv", number = 10)
+# Train the moquad_model$call[[2]]del
+model2 = train(log(price) ~ date + bedrooms + bathrooms + sqft_living + waterfront + 
+    view + condition + grade + yr_built + yr_renovated + zipcode + 
+    lat + long, method = "lm", data = house_tst,
+               trControl = train.control)
+```
+
+Predictor Transform:
+
+```{r}
+# Quad Model #3
+
+# Define training control
+set.seed(123) 
+train.control = trainControl(method = "cv", number = 10)
+# Train the moquad_model$call[[2]]del
+model3 = train(log(price) ~ date + bedrooms + bathrooms + log(sqft_living) + 
+    floors + waterfront + view + condition + grade + I(lat^2) + 
+    I(lat^3) + yr_built + zipcode, data = house_tst, method = "lm",
+               trControl = train.control)
+
+```
+
+Interaction Transform:
+
+```{r}
+
+# Quadractic Model with Interaction #4
+
+# Define training control
+set.seed(123) 
+train.control = trainControl(method = "cv", number = 10)
+# Train the moquad_model$call[[2]]del
+model4 = train(log(price) ~ date + bedrooms:floors + bathrooms + log(sqft_living) + 
+    waterfront + view + condition:grade + I(lat^2) + I(lat^3) + 
+    yr_built:yr_renovated + zipcode, data = house_tst, method = "lm",
+               trControl = train.control)
+
+```
+
+Box-Cox:
+
+```{r}
+# Box Model #5
+train2.control = trainControl(method = "cv", number = 10)
+# Train the moquad_model$call[[2]]del
+model5 = train((((log(price)^0.593) - 1)/0.593) ~ bathrooms + waterfront + view + 
+    grade + yr_built + lat + zipcode + sqft_living, data = house_tst, method = "lm",
+               trControl = train2.control)
+```
+
+```{r, echo = F}
+table = rbind(model1$results,model2$results, model3$results,model4$results,model5$results)
+table$Model = c("Additive model", "Response log transform", "Predictor transform", "Interaction model", "Box-Cox transform")
+table = table[,c(8,1,2,3,4,5,6,7)]
+colnames(table)[4] = "$R^2$"
+colnames(table)[7] = "$R^2$ SD"
+
+
+kable(
+  table,
+  format = "markdown",
+  digits = 3,
+  align = "l",
+  caption = "Results of Cross Validation (10-Fold) on Models",
+  label = NULL,
+  format.args = list(),
+  escape = TRUE)
+```
+
+***
+
+# Discussion
+
+## House Configuration and Price
+
+In some situations, it does appear that the house configuration does affect how frequently houses of certain configuration are bought. Generally, for the configurations that we explored, we found that during the winter months, there tends to be less purchased houses. But it impact the most houses with 2 bathrooms and 2 and 3 bedrooms, for other configurations the decline is not that big. There does seem to be some spikes of lowering the demand for large houses (from 3-rd quartile of `sqft_living`) different times of the year, but these could be random occurrences in the dataset. Other than that, in terms of trends, based on our data exploration methods, it does not appear that house configuration significantly contributes to the frequency of houses bought throughout the year. For a more precise answer to this question, we would potentially require a statistical method (e.g. Analysis of Variance) to explore how group means in price for different house configurations vary. Nonetheless, adding time into this would be an additional level of complexity that could require a separate statistical research.
+
+## Cross Validation
+
+Taking a closer look at the 10-fold cross-evaluation results, we can see that these results further re-enforce to use the 3-rd model due to the best results.  We see that among the RMSE, $R^2$, and MAE calculated means across the ten folds, it had one of the lower RMSE and MAE values, and has the highest $R^2$ among all the models.  In observing the standard deviation of RMSE, $R^2$, and MAE we see that there was little variance of the calculated values across the ten folds, which convinces us that the results are not just a byproduct of a single optimal train-test data split selection, as there is very little change in each iteration of the ten folds for different train-test combinations.
+
+
+## Final Model
+
+As a result of model selection process, we decided to chose the following model with predictor and response transformation (number 3 from the initial candidate model list)
+
+```{r}
+quad_model = lm(log(price) ~ date + bedrooms  +  bathrooms + log(sqft_living)  + floors + 
+                  waterfront + view + condition + grade   + I(lat^2) + I(lat^3) +  
+                  yr_built  + zipcode, data = house_trn)
+```
+
+The main reasons for choosing this model were:
+
+- the lowest RMSE, calculated on the test set
+- the highest adjusted $R^2$
+- the lowest AIC and BIC
+
+### Advantages
+
+Surprisingly, the model with interactions, which was initially promising due to the better results of BP and Shapiro tests, did not have that high Adjusted $R^2$ and such low RMSE, calculated on the test set, so appeared to be less useful for prediction.
+
+The model with Box-Cox transformation, which had the smallest LOOCV-RMSE among all models, and pretty good results of the BP and Shapiro tests, appeared to be the worst for prediction, and showed the biggest RMSE on the test set.
+
+### Disadvantages
+
+The chosen model (`quad_model`) still has some drawbacks, like violation of normality and equal distribution assumption, and relatively large number of outliers (2-nd worst model in the list for this criteria), but it can be a limitation, imposed by the data set, which result in those kind of issues. As per observations, some clustering of data needed to be done to create more efficient models.
+
+
+## Takeaway
+
+Summarizing, the model which can be best from the explored to predict housing prices, would suppose that the logarithm of price has linear dependency on logarithm of square footage of the apartments interior living space, number of bedrooms and bathrooms of the sold house, date of sale, number of floors, presence of water around, view, condition, grade, year of building the house, its zipcode, and 2nd and 3rd order of latitude.  
+
+The possible reason, why the price does not depend so much on longitude can be that King County is vertical stretched, so the longitude is pretty similar for all the houses, and `zipcode` takes most part of the rest explanation of variation of longitude. Possible reason, why out of footage variables model uses only `sqft_living`, is that part of the other footage variables are derived from this variable (`sqft_above` for example), and part of the other (like related to the square footage and the land size of the neighbor houses) are as well explained by `zipcode` or other categorical variables like `view`, `condition` or `waterfront`. Absence or presence of basement does not influence significantly on the house price. Surprisingly, even `yr_renovated` does not have a big influence, even if it does not seem logic from the first side. But if we will look at the values of this variable, we will see, that some of the renovation dates go back to the early 1900s, so the newly built house appears to be more valuable than renovated 70 years ago. 
+
+
+# Appendix
+
+## Authors
+
+    Ricky Uch (rickyu2@illinois.edu, NetID = rickyu2)
+    Marina Polupanova (marinap2@illinois.edu, NetID = marinap2)
+    Jonathan Quach (jdquach2@illinois.edu, NetID = jdquach2)
+
+
+## Function Definitions
+
+```{r}
+library(lmtest)
+#function to plot Fitted vs Residuals and Q-Q plot for a model
+plot_graph = function(model) {
+  par(mfrow = c(1,2))
+  plot(fitted(model), resid(model), col = "green", pch = 20, cex = 1.5,
+       xlab = "Fitted", ylab = "Residuals", 
+       main = "Fitted vs Residuals")
+  abline(h = 0, col = "red", lwd = 2)
+
+  qqnorm(resid(model), col = "green", pch = 20, cex = 1.5)
+  qqline(resid(model), col = "red", lwd = 2)
+}
+
+#function to test Breush-Pagan, Shapiro tests, LOOC RMSE,R squared, AIC, BIC
+test_check = function(model){
+  result = c(shapiro.test(resid(model))$p.value,
+  bptest(model)$p.value,
+  sqrt(mean((resid(model) / (1 - hatvalues(model))) ^ 2)),
+  summary(model)$adj.r.squared,
+  AIC(model),
+  BIC(model))
+  names(result) = c("Shapiro p-value", "BP p-value", "LOOCV RMSE", "Adjusted R^2", "AIC", "BIC")
+  return (result)
+}
+```
+
+## Code to plot the tables for "Results" section:
+
+```{r, eval = FALSE}
+# Table with RMSE on test set, $R^2$, LOOCV RMSE, AIC, BIC
+table = data.frame(rows = c("RMSE on test set", "$R^2$", "LOOCV RMSE", "AIC","BIC"),
+                   r_model1 = c(RMSE_tst_1, unname(test_check(add_model_trn)[4]), 
+                                unname(test_check(add_model_trn)[3]), unname(test_check(add_model_trn)[5]),unname(test_check(add_model_trn)[6])),
+                   r_model2 = c(RMSE_tst_2, unname(test_check(log_model_2)[4]), 
+                                test_check(log_model_2)[3], unname(test_check(log_model_2)[5]),unname(test_check(log_model_2)[6])),
+                   r_model3 = c(RMSE_tst_3, unname(test_check(quad_model)[4]), 
+                                test_check(quad_model)[3], unname(test_check(quad_model)[5]),unname(test_check(quad_model)[6])),
+                   r_model4 = c(RMSE_tst_4, unname(test_check(int_model)[4]), 
+                                test_check(int_model)[3], unname(test_check(int_model)[5]),unname(test_check(int_model)[6])),
+                   r_model5 = c(RMSE_tst_5, unname(test_check(box_model)[4]), 
+                                test_check(box_model)[3], unname(test_check(box_model)[5]),unname(test_check(box_model)[6])))
+
+library("knitr")
+kable(
+  table,
+  format = "markdown",
+  digits = 2,
+  col.names = c("Test", "Additive model", "Response log transform", "Predictor transform", "Interaction model", "Box-Cox transform"),
+  align = "l",
+  caption = "Results of testing different models",
+  label = NULL,
+  format.args = list(big.mark = ","),
+  escape = TRUE)
+
+#Table with p-values of normality and equal distribution test assumptions
+
+table = data.frame(rows = c( "Additive model", "Response log transform", "Predictor transform", "Interaction model", "Box-Cox transform"),
+                   Shapiro = c(unname(test_check(add_model_trn)[1]), test_check(log_model_2)[1], test_check(quad_model)[1], test_check(int_model)[1], test_check(box_model)[1]),
+                   bp = c(unname(test_check(add_model_trn)[2]), test_check(log_model_2)[2], test_check(quad_model)[2], test_check(int_model)[2], test_check(box_model)[2]))
+                   
+kable(
+  table,
+  format = "markdown",
+  digits = 153,
+  col.names = c("Test", "Shapiro test p-value", "B-P test p-value" ),
+  align = "l",
+  caption = "Results of assumption testing different models",
+  label = NULL,
+  format.args = list(),
+  escape = TRUE)
+
+
+#Cross-valudation results table
+table = rbind(model1$results,model2$results, model3$results,model4$results,model5$results)
+table$Model = c("Additive model", "Response log transform", "Predictor transform", "Interaction model", "Box-Cox transform")
+table = table[,c(8,1,2,3,4,5,6,7)]
+colnames(table)[4] = "$R^2$"
+colnames(table)[7] = "$R^2$ SD"
+
+
+kable(
+  table,
+  format = "markdown",
+  digits = 3,
+  align = "l",
+  caption = "Results of Cross Validation (10-Fold) on Models",
+  label = NULL,
+  format.args = list(),
+  escape = TRUE)
+
+
+```
+
+## Code to plot the predictor vs response plots, "Initial model exploration" section:
+
+```{r, eval = FALSE}
+#Initial plots
+par(mfrow = c(4, 4), mar = c(2, 2, 1, 1))
+plot(price ~ date, data = house_trn, main = "price vs date")
+plot(price ~ bedrooms, data = house_trn, main = "price vs bedrooms")
+plot(price ~ bathrooms, data = house_trn, main = "price vs bathrooms")
+plot(price ~ sqft_living, data = house_trn, main = "price vs sqft_living")
+plot(price ~ sqft_lot, data = house_trn, main = "price vs sqft_lot")
+plot(price ~ floors, data = house_trn, main = "price vs floors")
+plot(price ~ view, data = house_trn, main = "price vs view")
+plot(price ~ condition, data = house_trn, main = "price vs condition")
+plot(price ~ grade, data = house_trn, main = "price vs grade")
+plot(price ~ sqft_above, data = house_trn, main = "price vs sqft_above")
+plot(price ~ yr_built, data = house_trn, main = "price vs yr_built")
+plot(price ~ zipcode, data = house_trn, main = "price vs zipcode")
+plot(price ~ lat, data = house_trn, main = "price vs latitude")
+plot(price ~ long, data = house_trn, main = "price vs longitude")
+plot(price ~ sqft_living15, data = house_trn, main = "price vs sqft_living15")
+plot(price ~ sqft_lot15, data = house_trn, main = "price vs sqft_lot15")
+
+#Plots after response log transformation
+par(mfrow = c(3, 4), mar = c(2, 2, 1, 1))
+plot(log(price) ~ date, data = house_trn, main = "log(price) vs date")
+plot(log(price) ~ bedrooms, data = house_trn, main = "log(price) vs bedrooms")
+plot(log(price) ~ bathrooms, data = house_trn, main = "log(price) vs bathrooms")
+plot(log(price) ~ sqft_living, data = house_trn, main = "log(price) vs sqft_living")
+plot(log(price) ~ view, data = house_trn, main = "log(price) vs view")
+plot(log(price) ~ condition, data = house_trn, main = "log(price) vs condition")
+plot(log(price) ~ grade, data = house_trn, main = "log(price) vs grade")
+plot(log(price) ~ yr_built, data = house_trn, main = "log(price) vs yr_built")
+plot(log(price) ~ yr_renovated, data = house_trn, main = "log(price) vs yr_renovated")
+plot(log(price) ~ zipcode, data = house_trn, main = "log(price) vs zipcode")
+plot(log(price) ~ lat, data = house_trn, main = "log(price) vs latitude")
+plot(log(price) ~ long, data = house_trn, main = "log(price) vs longitude")
+
+
+
+```
+
+
